@@ -130,20 +130,24 @@ export function analyzeTask(task: Task): TaskAnalysis {
   }
 
   // 计算风险等级
-  const totalScore = task.funnelScores.reduce((sum, fs) => sum + fs.score, 0);
-  const maxScore = task.funnelScores.length * 2;
-  const passRate = totalScore / maxScore;
+  // passedLayers: AI通过的层数（score=0表示通过），通过越多=风险越高
+  // scoreRate: 分数率(0-1)，分数越高=壁垒越强=风险越低
+  // 用 passedLayers/总层数 作为真正的"AI通过率"
+  const aiPassRate = passedLayers / task.funnelScores.length;
 
   let riskLevel: TaskRiskLevel;
   let riskDescription: string;
 
-  if (passRate <= 0.25) {
+  if (aiPassRate <= 0.25) {
+    // AI通过率低（≤25%），大部分层被拦住，风险低
     riskLevel = 'low';
     riskDescription = '该任务漏斗拦截率高，AI短期内难以替代';
-  } else if (passRate <= 0.58) {
+  } else if (aiPassRate <= 0.58) {
+    // AI部分通过，风险中等
     riskLevel = 'medium';
     riskDescription = '该任务部分环节可被AI辅助，但核心环节仍有壁垒';
   } else {
+    // AI通过率高（>58%），风险高
     riskLevel = 'high';
     riskDescription = '该任务漏斗通过率高，AI替代风险较大';
   }
