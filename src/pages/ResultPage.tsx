@@ -1,25 +1,31 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useAppState } from '../store';
 import { analyzeJob, generateFunnelData, generateRadarData, type JobAnalysis, type TaskAnalysis } from '../data/analysisEngine';
 import { FUNNEL_LAYERS } from '../data/funnelLayers';
 import { Button, Toast } from 'antd-mobile';
-import html2canvas from 'html2canvas';
 import ReactEChartsCore from 'echarts-for-react/lib/core';
-import * as echarts from 'echarts/core';
-import { FunnelChart, RadarChart, BarChart } from 'echarts/charts';
-import {
-  TitleComponent,
-  TooltipComponent,
-  LegendComponent,
-  GridComponent,
-} from 'echarts/components';
-import { CanvasRenderer } from 'echarts/renderers';
+import * as echarts from 'echarts';
 
-echarts.use([
-  FunnelChart, RadarChart, BarChart,
-  TitleComponent, TooltipComponent, LegendComponent, GridComponent,
-  CanvasRenderer,
-]);
+/** 错误边界：防止单个组件崩溃导致整个页面白屏 */
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
+  state = { hasError: false, error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 16, background: '#fff1f0', borderRadius: 8, color: '#cf1322', fontSize: 13, lineHeight: 1.6 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>图表渲染出错</div>
+          <div>{this.state.error?.message || '未知错误'}</div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function ResultPage() {
   const { state, setStep, setJobAnalysis } = useAppState();
@@ -31,6 +37,7 @@ export default function ResultPage() {
     if (!reportRef.current) return;
     setSaving(true);
     try {
+      const html2canvas = (await import('html2canvas')).default;
       const canvas = await html2canvas(reportRef.current, {
         backgroundColor: '#f5f5f5',
         scale: 2,
@@ -48,6 +55,7 @@ export default function ResultPage() {
     }
   };
 
+  // 当数据就绪时计算分析结果，依赖 jobAnalysis 确保页面进入时也能触发
   useEffect(() => {
     const activeTasks = customTasks.filter(t => selectedTaskIds.has(t.id));
     if (activeTasks.length === 0 || taskScores.length === 0) return;
@@ -70,12 +78,13 @@ export default function ResultPage() {
 
     const analysis = analyzeJob(tasksWithScores);
     setJobAnalysis(analysis);
-  }, [customTasks, taskScores, selectedTaskIds]);
+  }, [customTasks, taskScores, selectedTaskIds, setJobAnalysis]);
 
   if (!jobAnalysis) {
     return (
       <div className="page-container">
         <div className="page-title">分析中...</div>
+        <div className="page-subtitle" style={{ marginTop: 8 }}>正在计算漏斗分析结果...</div>
       </div>
     );
   }
@@ -124,13 +133,17 @@ export default function ResultPage() {
       {/* 六维雷达图 */}
       <div className="result-section">
         <div className="result-section-title">🎯 六维壁垒雷达</div>
-        <RadarChartComponent analysis={jobAnalysis} />
+        <ErrorBoundary>
+          <RadarChartComponent analysis={jobAnalysis} />
+        </ErrorBoundary>
       </div>
 
       {/* 漏斗穿透图 */}
       <div className="result-section">
         <div className="result-section-title">🔽 漏斗穿透率（按时间加权）</div>
-        <FunnelChartComponent analysis={jobAnalysis} />
+        <ErrorBoundary>
+          <FunnelChartComponent analysis={jobAnalysis} />
+        </ErrorBoundary>
       </div>
 
       {/* 各任务风险明细 */}
@@ -232,7 +245,11 @@ export default function ResultPage() {
 function RadarChartComponent({ analysis }: { analysis: JobAnalysis }) {
   const radarData = useMemo(() => generateRadarData(analysis.taskAnalyses), [analysis]);
 
-  const option = useMemo(() => ({
+  if (radarData.length === 0) {
+    return <div style={{ padding: 20, color: '#999', textAlign: 'center' }}>暂无数据</div>;
+  }
+
+  const option = {
     tooltip: {
       trigger: 'item' as const,
     },
@@ -270,7 +287,7 @@ function RadarChartComponent({ analysis }: { analysis: JobAnalysis }) {
         },
       }],
     }],
-  }), [radarData]);
+  };
 
   return (
     <ReactEChartsCore
@@ -287,7 +304,11 @@ function RadarChartComponent({ analysis }: { analysis: JobAnalysis }) {
 function FunnelChartComponent({ analysis }: { analysis: JobAnalysis }) {
   const funnelData = useMemo(() => generateFunnelData(analysis.taskAnalyses), [analysis]);
 
-  const option = useMemo(() => ({
+  if (funnelData.length === 0) {
+    return <div style={{ padding: 20, color: '#999', textAlign: 'center' }}>暂无数据</div>;
+  }
+
+  const option = {
     tooltip: {
       trigger: 'axis' as const,
       axisPointer: { type: 'shadow' as const },
@@ -333,7 +354,7 @@ function FunnelChartComponent({ analysis }: { analysis: JobAnalysis }) {
         fontWeight: 600,
       },
     }],
-  }), [funnelData]);
+  };
 
   return (
     <ReactEChartsCore
