@@ -1,30 +1,118 @@
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppState } from '../store';
 import { analyzeJob, generateFunnelData, generateRadarData, type JobAnalysis, type TaskAnalysis } from '../data/analysisEngine';
 import { FUNNEL_LAYERS } from '../data/funnelLayers';
 import { Button, Toast } from 'antd-mobile';
-import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts';
 
-/** 错误边界：防止单个组件崩溃导致整个页面白屏 */
-class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
-  state = { hasError: false, error: null as Error | null };
+/** 原生 ECharts hook：不依赖 echarts-for-react，避免兼容性问题 */
+function useECharts(option: echarts.EChartsOption, height: number) {
+  const chartRef = useRef<HTMLDivElement>(null);
+  const instanceRef = useRef<echarts.ECharts | null>(null);
 
-  static getDerivedStateFromError(error: Error) {
-    return { hasError: true, error };
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div style={{ padding: 16, background: '#fff1f0', borderRadius: 8, color: '#cf1322', fontSize: 13, lineHeight: 1.6 }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>图表渲染出错</div>
-          <div>{this.state.error?.message || '未知错误'}</div>
-        </div>
-      );
+  useEffect(() => {
+    if (!chartRef.current) return;
+    if (!instanceRef.current) {
+      instanceRef.current = echarts.init(chartRef.current);
     }
-    return this.props.children;
+    instanceRef.current.setOption(option, true);
+  }, [option]);
+
+  useEffect(() => {
+    const el = chartRef.current;
+    if (!el) return;
+    const handleResize = () => {
+      instanceRef.current?.resize();
+    };
+    const ro = new ResizeObserver(handleResize);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      instanceRef.current?.dispose();
+      instanceRef.current = null;
+    };
+  }, []);
+
+  return { chartRef, style: { height } };
+}
+
+/** 雷达图组件 */
+function RadarChartComponent({ analysis }: { analysis: JobAnalysis }) {
+  const radarData = useMemo(() => generateRadarData(analysis.taskAnalyses), [analysis]);
+
+  if (radarData.length === 0) {
+    return <div style={{ padding: 20, color: '#999', textAlign: 'center' }}>暂无数据</div>;
   }
+
+  const option: echarts.EChartsOption = {
+    tooltip: { trigger: 'item' },
+    radar: {
+      indicator: radarData.map(d => ({ name: d.layerName, max: 2 })),
+      shape: 'polygon',
+      splitNumber: 2,
+      axisName: { color: '#666', fontSize: 11 },
+      splitArea: {
+        areaStyle: {
+          color: ['rgba(82,196,26,0.1)', 'rgba(250,173,20,0.1)', 'rgba(255,77,79,0.1)'],
+        },
+      },
+    },
+    series: [{
+      type: 'radar',
+      data: [{
+        value: radarData.map(d => Math.round(d.avgScore * 10) / 10),
+        name: '壁垒强度',
+        areaStyle: { color: 'rgba(255, 77, 79, 0.2)' },
+        lineStyle: { color: '#ff4d4f', width: 2 },
+        itemStyle: { color: '#ff4d4f' },
+      }],
+    }],
+  };
+
+  const { chartRef, style } = useECharts(option, 280);
+  return <div ref={chartRef} style={style} />;
+}
+
+/** 漏斗穿透率柱状图组件 */
+function FunnelChartComponent({ analysis }: { analysis: JobAnalysis }) {
+  const funnelData = useMemo(() => generateFunnelData(analysis.taskAnalyses), [analysis]);
+
+  if (funnelData.length === 0) {
+    return <div style={{ padding: 20, color: '#999', textAlign: 'center' }}>暂无数据</div>;
+  }
+
+  const option: echarts.EChartsOption = {
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+    },
+    grid: { left: 80, right: 40, top: 10, bottom: 20 },
+    xAxis: {
+      type: 'value',
+      max: 100,
+      axisLabel: { formatter: '{value}%', fontSize: 11 },
+    },
+    yAxis: {
+      type: 'category',
+      data: funnelData.map(d => d.layerName).reverse(),
+      axisLabel: { fontSize: 12 },
+    },
+    series: [{
+      type: 'bar',
+      data: funnelData.map(d => ({
+        value: Math.round(d.weightedPassRate * 100),
+        itemStyle: {
+          color: d.weightedPassRate > 0.6 ? '#ff4d4f' : d.weightedPassRate > 0.3 ? '#faad14' : '#52c41a',
+          borderRadius: [0, 4, 4, 0],
+        },
+      })).reverse(),
+      barWidth: 18,
+      label: { show: true, position: 'right', formatter: '{c}%', fontSize: 11, fontWeight: 600 },
+    }],
+  };
+
+  const { chartRef, style } = useECharts(option, 240);
+  return <div ref={chartRef} style={style} />;
 }
 
 export default function ResultPage() {
@@ -133,17 +221,13 @@ export default function ResultPage() {
       {/* 六维雷达图 */}
       <div className="result-section">
         <div className="result-section-title">🎯 六维壁垒雷达</div>
-        <ErrorBoundary>
-          <RadarChartComponent analysis={jobAnalysis} />
-        </ErrorBoundary>
+        <RadarChartComponent analysis={jobAnalysis} />
       </div>
 
       {/* 漏斗穿透图 */}
       <div className="result-section">
         <div className="result-section-title">🔽 漏斗穿透率（按时间加权）</div>
-        <ErrorBoundary>
-          <FunnelChartComponent analysis={jobAnalysis} />
-        </ErrorBoundary>
+        <FunnelChartComponent analysis={jobAnalysis} />
       </div>
 
       {/* 各任务风险明细 */}
@@ -238,132 +322,6 @@ export default function ResultPage() {
         </Button>
       </div>
     </div>
-  );
-}
-
-/** 六维雷达图 */
-function RadarChartComponent({ analysis }: { analysis: JobAnalysis }) {
-  const radarData = useMemo(() => generateRadarData(analysis.taskAnalyses), [analysis]);
-
-  if (radarData.length === 0) {
-    return <div style={{ padding: 20, color: '#999', textAlign: 'center' }}>暂无数据</div>;
-  }
-
-  const option = {
-    tooltip: {
-      trigger: 'item' as const,
-    },
-    radar: {
-      indicator: radarData.map(d => ({
-        name: d.layerName,
-        max: 2,
-      })),
-      shape: 'polygon' as const,
-      splitNumber: 2,
-      axisName: {
-        color: '#666',
-        fontSize: 11,
-      },
-      splitArea: {
-        areaStyle: {
-          color: ['rgba(82,196,26,0.1)', 'rgba(250,173,20,0.1)', 'rgba(255,77,79,0.1)'],
-        },
-      },
-    },
-    series: [{
-      type: 'radar',
-      data: [{
-        value: radarData.map(d => Math.round(d.avgScore * 10) / 10),
-        name: '壁垒强度',
-        areaStyle: {
-          color: 'rgba(255, 77, 79, 0.2)',
-        },
-        lineStyle: {
-          color: '#ff4d4f',
-          width: 2,
-        },
-        itemStyle: {
-          color: '#ff4d4f',
-        },
-      }],
-    }],
-  };
-
-  return (
-    <ReactEChartsCore
-      echarts={echarts}
-      option={option}
-      style={{ height: 280 }}
-      notMerge={true}
-      lazyUpdate={true}
-    />
-  );
-}
-
-/** 漏斗穿透率柱状图 */
-function FunnelChartComponent({ analysis }: { analysis: JobAnalysis }) {
-  const funnelData = useMemo(() => generateFunnelData(analysis.taskAnalyses), [analysis]);
-
-  if (funnelData.length === 0) {
-    return <div style={{ padding: 20, color: '#999', textAlign: 'center' }}>暂无数据</div>;
-  }
-
-  const option = {
-    tooltip: {
-      trigger: 'axis' as const,
-      axisPointer: { type: 'shadow' as const },
-      formatter: (params: Array<{ name: string; value: number }>) => {
-        const p = params[0];
-        return `${p.name}<br/>AI通过率: ${Math.round(p.value)}%`;
-      },
-    },
-    grid: {
-      left: 80,
-      right: 40,
-      top: 10,
-      bottom: 20,
-    },
-    xAxis: {
-      type: 'value' as const,
-      max: 100,
-      axisLabel: {
-        formatter: '{value}%',
-        fontSize: 11,
-      },
-    },
-    yAxis: {
-      type: 'category' as const,
-      data: funnelData.map(d => d.layerName).reverse(),
-      axisLabel: { fontSize: 12 },
-    },
-    series: [{
-      type: 'bar',
-      data: funnelData.map(d => ({
-        value: Math.round(d.weightedPassRate * 100),
-        itemStyle: {
-          color: d.weightedPassRate > 0.6 ? '#ff4d4f' : d.weightedPassRate > 0.3 ? '#faad14' : '#52c41a',
-          borderRadius: [0, 4, 4, 0],
-        },
-      })).reverse(),
-      barWidth: 18,
-      label: {
-        show: true,
-        position: 'right' as const,
-        formatter: '{c}%',
-        fontSize: 11,
-        fontWeight: 600,
-      },
-    }],
-  };
-
-  return (
-    <ReactEChartsCore
-      echarts={echarts}
-      option={option}
-      style={{ height: 240 }}
-      notMerge={true}
-      lazyUpdate={true}
-    />
   );
 }
 
